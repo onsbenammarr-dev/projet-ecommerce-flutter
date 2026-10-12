@@ -4,7 +4,6 @@ import '../controllers/auth_controller.dart';
 import '../controllers/product_controller.dart';
 import '../models/product_model.dart';
 import 'product_form_view.dart';
-import 'product_image.dart';
 
 class AdminHomeView extends StatelessWidget {
   const AdminHomeView({super.key});

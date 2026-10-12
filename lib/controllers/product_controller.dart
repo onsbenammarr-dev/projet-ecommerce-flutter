@@ -19,6 +19,11 @@ class ProductController extends ChangeNotifier {
   SortOption sort = SortOption.popularity;
 
   ProductController() {
+    _listen();
+  }
+
+  void _listen() {
+    _sub?.cancel();
     _sub = _service.watchProducts().listen(
       (list) {
         _all = list;
@@ -29,10 +34,18 @@ class ProductController extends ChangeNotifier {
       onError: (e) {
         loading = false;
         error = 'Impossible de charger les produits. '
-            'Vérifiez les règles Firestore et votre connexion.';
+            'Vérifiez votre connexion puis réessayez.';
         notifyListeners();
       },
     );
+  }
+
+  /// Relance le chargement après une erreur
+  void retry() {
+    loading = true;
+    error = null;
+    notifyListeners();
+    _listen();
   }
 
   double get maxPrice {
@@ -48,6 +61,9 @@ class ProductController extends ChangeNotifier {
   }
 
   bool get hasPriceFilter => priceFilter != null;
+
+  /// Tous les produits, sans filtre (pour l'admin)
+  List<ProductModel> get allProducts => _all;
 
   List<ProductModel> get products {
     var list = _all.where((p) {
@@ -97,14 +113,6 @@ class ProductController extends ChangeNotifier {
     notifyListeners();
   }
 
-  @override
-  void dispose() {
-    _sub?.cancel();
-    super.dispose();
-  }
-    /// Tous les produits, sans filtre (pour l'admin)
-  List<ProductModel> get allProducts => _all;
-
   /// Ajoute (id vide) ou modifie un produit. Renvoie null si OK, sinon l'erreur.
   Future<String?> saveProduct(ProductModel p) async {
     try {
@@ -135,5 +143,11 @@ class ProductController extends ChangeNotifier {
     } catch (e) {
       return 'Erreur : $e';
     }
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    super.dispose();
   }
 }

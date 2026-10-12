@@ -5,6 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 import '../controllers/auth_controller.dart';
+import '../theme/app_theme.dart';
+import '../widgets/app_footer.dart';
+import '../widgets/footer_view.dart';
 
 class ProfileView extends StatefulWidget {
   const ProfileView({super.key});
@@ -125,13 +128,13 @@ class _ProfileViewState extends State<ProfileView> {
     if (user == null) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
-    final cs = Theme.of(context).colorScheme;
     final photo = _newPhoto ?? user.photoBytes;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Mon profil')),
+            bottomNavigationBar: const FooterView(current: FooterTab.profile),
       body: SafeArea(
-        child: SingleChildScrollView(
+        child: FooterScroll(
           padding: const EdgeInsets.all(20),
           child: Form(
             key: _formKey,
@@ -143,11 +146,12 @@ class _ProfileViewState extends State<ProfileView> {
                     children: [
                       CircleAvatar(
                         radius: 56,
-                        backgroundColor: cs.primaryContainer,
+                        backgroundColor: AppColors.lilac,
                         backgroundImage:
                             photo != null ? MemoryImage(photo) : null,
                         child: photo == null
-                            ? Icon(Icons.person, size: 56, color: cs.primary)
+                            ? const Icon(Icons.person,
+                                size: 56, color: AppColors.ink)
                             : null,
                       ),
                       Positioned(
@@ -166,13 +170,13 @@ class _ProfileViewState extends State<ProfileView> {
                 Row(
                   children: [
                     Expanded(
-                      child: _stat(context, Icons.receipt_long_outlined,
-                          '${user.orderCount}', 'Commandes'),
+                      child: _stat(Icons.receipt_long_outlined,
+                          '${user.orderCount}', 'Commandes', AppColors.mint),
                     ),
                     const SizedBox(width: 12),
                     Expanded(
-                      child: _stat(context, Icons.stars_rounded,
-                          '${user.loyaltyPoints}', 'Points fidélité'),
+                      child: _stat(Icons.stars_rounded, '${user.loyaltyPoints}',
+                          'Points fidélité', AppColors.peach),
                     ),
                   ],
                 ),
@@ -216,16 +220,16 @@ class _ProfileViewState extends State<ProfileView> {
                       ? const SizedBox(
                           height: 22,
                           width: 22,
-                          child: CircularProgressIndicator(strokeWidth: 2))
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: Colors.white))
                       : const Text('Enregistrer'),
                 ),
                 const SizedBox(height: 12),
                 OutlinedButton.icon(
                   style: OutlinedButton.styleFrom(
-                    minimumSize: const Size.fromHeight(50),
+                    minimumSize: const Size.fromHeight(52),
                     foregroundColor: Colors.red,
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12)),
+                    side: const BorderSide(color: Colors.red),
                   ),
                   onPressed: _logout,
                   icon: const Icon(Icons.logout),
@@ -239,23 +243,22 @@ class _ProfileViewState extends State<ProfileView> {
     );
   }
 
-  Widget _stat(BuildContext context, IconData icon, String value, String label) {
-    final cs = Theme.of(context).colorScheme;
+  Widget _stat(IconData icon, String value, String label, Color tint) {
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 14),
       decoration: BoxDecoration(
-        color: cs.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(12),
+        color: tint,
+        borderRadius: BorderRadius.circular(20),
       ),
       child: Column(
         children: [
-          Icon(icon, color: cs.primary),
+          Icon(icon, color: AppColors.ink),
           const SizedBox(height: 4),
           Text(value,
               style: Theme.of(context)
                   .textTheme
                   .titleLarge
-                  ?.copyWith(fontWeight: FontWeight.bold)),
+                  ?.copyWith(fontWeight: FontWeight.w700)),
           Text(label, style: Theme.of(context).textTheme.bodySmall),
         ],
       ),
