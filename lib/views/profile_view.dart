@@ -8,6 +8,7 @@ import '../controllers/auth_controller.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_footer.dart';
 import '../widgets/footer_view.dart';
+import 'orders_view.dart';
 
 class ProfileView extends StatefulWidget {
   const ProfileView({super.key});
@@ -132,7 +133,7 @@ class _ProfileViewState extends State<ProfileView> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Mon profil')),
-            bottomNavigationBar: const FooterView(current: FooterTab.profile),
+      bottomNavigationBar: const FooterView(current: FooterTab.profile),
       body: SafeArea(
         child: FooterScroll(
           padding: const EdgeInsets.all(20),
@@ -179,6 +180,21 @@ class _ProfileViewState extends State<ProfileView> {
                           'Points fidélité', AppColors.peach),
                     ),
                   ],
+                ),
+                const SizedBox(height: 16),
+                Card(
+                  clipBehavior: Clip.antiAlias,
+                  child: ListTile(
+                    leading: const Icon(Icons.local_shipping_outlined),
+                    title: const Text('Mes commandes',
+                        style: TextStyle(fontWeight: FontWeight.w700)),
+                    subtitle: const Text('Historique et suivi de livraison'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) => const OrdersView())),
+                  ),
                 ),
                 const SizedBox(height: 24),
                 TextFormField(

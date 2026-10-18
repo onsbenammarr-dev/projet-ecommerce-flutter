@@ -145,9 +145,9 @@ class AppFooter extends StatelessWidget {
                 () => _info(
                     context,
                     'Livraison',
-                    'Vos commandes sont confiées à nos sociétés de livraison '
-                        'partenaires. Vous suivez l\'état de chaque commande '
-                        'depuis votre historique.'),
+                                        'Livraison standard : 8 DT, offerte dès 100 DT d\'achats, '
+                        'en 2 à 4 jours ouvrables. Vous suivez l\'état de chaque '
+                        'commande depuis votre historique.'),
               ),
               _link(
                 'Paiement',

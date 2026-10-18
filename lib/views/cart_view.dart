@@ -4,8 +4,11 @@ import '../controllers/cart_controller.dart';
 import '../controllers/product_controller.dart';
 import '../models/product_model.dart';
 import '../theme/app_theme.dart';
+import '../utils/shipping.dart';
 import '../widgets/app_footer.dart';
 import '../widgets/footer_view.dart';
+import '../widgets/free_shipping_bar.dart';
+import 'checkout_view.dart';
 import 'product_form_view.dart';
 
 class _Line {
@@ -75,8 +78,9 @@ class CartView extends StatelessWidget {
     }
     lines.sort((a, b) =>
         a.product.name.toLowerCase().compareTo(b.product.name.toLowerCase()));
-    final total = lines.fold<double>(0, (s, l) => s + l.subtotal);
+    final subtotal = lines.fold<double>(0, (s, l) => s + l.subtotal);
     final count = lines.fold<int>(0, (s, l) => s + l.quantity);
+    final fee = shippingFor(subtotal);
 
     return Scaffold(
       appBar: AppBar(
@@ -92,7 +96,7 @@ class CartView extends StatelessWidget {
       ),
       body: Column(
         children: [
-          Expanded(child: _body(context, cart, pc, lines)),
+          Expanded(child: _body(context, cart, pc, lines, subtotal)),
           // panier vide : le footer d'informations reste collé en bas
           if (lines.isEmpty && !pc.loading) const AppFooter(),
         ],
@@ -107,12 +111,18 @@ class CartView extends StatelessWidget {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  _sumRow(
+                      'Sous-total ($count article${count > 1 ? 's' : ''})',
+                      dt(subtotal)),
+                  _sumRow('Livraison', fee == 0 ? 'Gratuite' : dt(fee),
+                      color: fee == 0 ? AppColors.olive : null),
+                  const SizedBox(height: 6),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text('Total ($count article${count > 1 ? 's' : ''})',
+                      Text('Total',
                           style: Theme.of(context).textTheme.titleMedium),
-                      Text('${total.toStringAsFixed(2)} DT',
+                      Text(dt(subtotal + fee),
                           style: Theme.of(context)
                               .textTheme
                               .titleLarge
@@ -121,8 +131,10 @@ class CartView extends StatelessWidget {
                   ),
                   const SizedBox(height: 12),
                   FilledButton.icon(
-                    onPressed: () => _snack(context,
-                        'La commande sera disponible à la prochaine étape.'),
+                    onPressed: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) => const CheckoutView())),
                     icon: const Icon(Icons.shopping_bag_outlined),
                     label: const Text('Passer la commande'),
                   ),
@@ -135,8 +147,20 @@ class CartView extends StatelessWidget {
     );
   }
 
+  Widget _sumRow(String label, String value, {Color? color}) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(label, style: const TextStyle(color: AppColors.muted)),
+            Text(value,
+                style: TextStyle(color: color, fontWeight: FontWeight.w600)),
+          ],
+        ),
+      );
+
   Widget _body(BuildContext context, CartController cart,
-      ProductController pc, List<_Line> lines) {
+      ProductController pc, List<_Line> lines, double subtotal) {
     if (pc.loading) return const Center(child: CircularProgressIndicator());
     if (cart.error != null) {
       return Center(child: Text(cart.error!, textAlign: TextAlign.center));
@@ -154,7 +178,8 @@ class CartView extends StatelessWidget {
               Text('Votre panier est vide',
                   style: Theme.of(context).textTheme.titleMedium),
               const SizedBox(height: 8),
-              const Text('Ajoutez des produits pour commencer.',
+              Text(
+                  'Livraison offerte dès ${dt(kFreeShippingThreshold)} d\'achats.',
                   textAlign: TextAlign.center),
               const SizedBox(height: 20),
               FilledButton(
@@ -169,18 +194,20 @@ class CartView extends StatelessWidget {
       );
     }
 
+    // index 0 : barre de livraison, 1..n : lignes, dernier : footer
     return ListView.separated(
       padding: const EdgeInsets.all(12),
-      itemCount: lines.length + 1, // +1 : le footer d'informations
+      itemCount: lines.length + 2,
       separatorBuilder: (_, __) => const SizedBox(height: 8),
       itemBuilder: (ctx, i) {
-        if (i == lines.length) {
+        if (i == 0) return FreeShippingBar(subtotal: subtotal);
+        if (i == lines.length + 1) {
           return const Padding(
             padding: EdgeInsets.only(top: 12),
             child: AppFooter(inset: true),
           );
         }
-        final l = lines[i];
+        final l = lines[i - 1];
         final p = l.product;
         return Card(
           child: Padding(
@@ -205,9 +232,13 @@ class CartView extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(fontWeight: FontWeight.w600)),
                       const SizedBox(height: 2),
-                      Text('${p.price.toStringAsFixed(2)} DT',
+                      Text(dt(p.price),
                           style: const TextStyle(
                               fontSize: 12, color: AppColors.muted)),
+                      if (l.quantity >= p.stock)
+                        const Text('Stock maximum atteint',
+                            style: TextStyle(
+                                fontSize: 11, color: AppColors.harissa)),
                       const SizedBox(height: 4),
                       Row(
                         children: [
@@ -259,7 +290,7 @@ class CartView extends StatelessWidget {
                             undo: () => cart.setQuantity(p, qty));
                       },
                     ),
-                    Text('${l.subtotal.toStringAsFixed(2)} DT',
+                    Text(dt(l.subtotal),
                         style: const TextStyle(fontWeight: FontWeight.w800)),
                   ],
                 ),
