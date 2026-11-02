@@ -7,6 +7,7 @@ import 'controllers/cart_controller.dart';
 import 'controllers/favorites_controller.dart';
 import 'controllers/order_controller.dart';
 import 'controllers/product_controller.dart';
+import 'controllers/tracking_controller.dart';
 import 'theme/app_theme.dart';
 import 'views/auth_gate.dart';
 
@@ -19,6 +20,7 @@ Future<void> main() async {
         ChangeNotifierProvider(create: (_) => AuthController()),
         ChangeNotifierProvider(create: (_) => ProductController()),
         ChangeNotifierProvider(create: (_) => OrderController()),
+        ChangeNotifierProvider(create: (_) => TrackingController()),
         // Le panier et les favoris suivent l'utilisateur connecté
         ChangeNotifierProxyProvider<AuthController, CartController>(
           create: (_) => CartController(),

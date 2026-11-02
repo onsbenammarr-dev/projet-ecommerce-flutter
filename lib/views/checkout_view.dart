@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -7,10 +8,15 @@ import '../controllers/order_controller.dart';
 import '../controllers/product_controller.dart';
 import '../models/order_model.dart';
 import '../models/product_model.dart';
+import '../services/payment_service.dart';
 import '../theme/app_theme.dart';
+import '../utils/location_helper.dart';
+import '../utils/loyalty.dart';
 import '../utils/shipping.dart';
 import '../widgets/footer_view.dart';
 import '../widgets/free_shipping_bar.dart';
+import '../widgets/loyalty_card.dart';
+import '../widgets/payment_section.dart';
 import 'order_success_view.dart';
 import 'product_form_view.dart';
 
@@ -34,20 +40,31 @@ class _CheckoutViewState extends State<CheckoutView> {
   final _phone = TextEditingController();
   final _governorate = TextEditingController();
   final _city = TextEditingController();
-  late final TextEditingController _address;
+  final _address = TextEditingController();
   final _postal = TextEditingController();
   final _note = TextEditingController();
+  final _card = CardControllers();
 
+  String _method = kPayCard;
+  bool _useLoyalty = true;
   bool _saveAddress = true;
   bool _terms = false;
   bool _termsError = false;
 
+  double? _lat;
+  double? _lng;
+  bool _locating = false;
+
   @override
   void initState() {
     super.initState();
-    final user = context.read<AuthController>().currentUser;
-    _name = TextEditingController(text: user?.name ?? '');
-    _address = TextEditingController(text: user?.address ?? '');
+    final auth = context.read<AuthController>();
+    _name = TextEditingController(text: auth.currentUser?.name ?? '');
+    _applyProfileAddress(auth.currentUser?.address ?? '');
+    // points à jour (le profil n'est lu qu'à la connexion)
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) auth.refreshProfile();
+    });
   }
 
   @override
@@ -55,7 +72,32 @@ class _CheckoutViewState extends State<CheckoutView> {
     for (final c in [_name, _phone, _governorate, _city, _address, _postal, _note]) {
       c.dispose();
     }
+    _card.dispose();
     super.dispose();
+  }
+
+  /// Découpe une adresse « rue, 8046 Ville, Gouvernorat » (éventuellement répétée)
+  /// pour remplir les champs sans doublon.
+  void _applyProfileAddress(String raw) {
+    var parts = raw
+        .split(',')
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList();
+    String? gov, city, postal;
+    while (parts.length >= 3) {
+      final g = matchGovernorate(parts.last);
+      final m = RegExp(r'^(\d{4})\s+(.+)$').firstMatch(parts[parts.length - 2]);
+      if (g == null || m == null) break;
+      gov ??= g;
+      postal ??= m.group(1);
+      city ??= m.group(2);
+      parts = parts.sublist(0, parts.length - 2);
+    }
+    _address.text = parts.join(', ');
+    if (gov != null) _governorate.text = gov;
+    if (city != null) _city.text = city;
+    if (postal != null) _postal.text = postal;
   }
 
   void _snack(String msg) {
@@ -73,6 +115,47 @@ class _CheckoutViewState extends State<CheckoutView> {
     var d = raw.replaceAll(RegExp(r'\D'), '');
     if (d.startsWith('216') && d.length == 11) d = d.substring(3);
     return d;
+  }
+
+  /// Remplit l'adresse à partir de la position GPS
+  Future<void> _useMyLocation() async {
+    setState(() => _locating = true);
+    try {
+      final pos = await getCurrentPosition();
+
+      PlaceInfo? place;
+      try {
+        place = await reverseGeocode(pos.latitude, pos.longitude);
+      } catch (_) {
+        place = null; // pas d'adresse trouvée : on garde quand même la position
+      }
+      if (!mounted) return;
+
+      setState(() {
+        _lat = pos.latitude;
+        _lng = pos.longitude;
+        if (place != null) {
+          if (place.governorate != null) _governorate.text = place.governorate!;
+          if (place.city != null) _city.text = place.city!;
+          final pc = place.postalCode;
+          if (pc != null && RegExp(r'^\d{4}$').hasMatch(pc)) _postal.text = pc;
+          if (place.street != null && place.street!.isNotEmpty) {
+            _address.text = place.street!;
+          }
+        }
+      });
+      _snack(place == null
+          ? 'Position enregistrée. Complétez l\'adresse à la main.'
+          : 'Adresse remplie depuis votre position. Vérifiez-la.');
+    } on LocationException catch (e) {
+      _snack(e.message);
+    } on TimeoutException {
+      _snack('Position introuvable. Réessayez à l\'air libre.');
+    } catch (_) {
+      _snack('Impossible de récupérer votre position.');
+    } finally {
+      if (mounted) setState(() => _locating = false);
+    }
   }
 
   Future<void> _pickGovernorate() async {
@@ -142,8 +225,13 @@ class _CheckoutViewState extends State<CheckoutView> {
                 '${dt(kFreeShippingThreshold)} d\'achats. Délai estimé : '
                 '$kDeliveryEstimate.\n\n'
                 'Prix : affichés en dinars tunisiens (DT), toutes taxes comprises.\n\n'
-                'Paiement : traité par un système de paiement sécurisé, aucune '
-                'donnée bancaire n\'est conservée.\n\n'
+                'Fidélité : $kLoyaltyRewardPoints points offerts toutes les '
+                '$kLoyaltyOrdersGoal commandes ($kPointsPerDinar points = 1 DT).\n\n'
+                'Position : si vous partagez votre position GPS, elle est '
+                'utilisée uniquement pour cette livraison.\n\n'
+                'Paiement : par carte (traité par un système de paiement '
+                'sécurisé) ou en espèces à la livraison. Aucune donnée '
+                'bancaire n\'est conservée.\n\n'
                 '(Texte à compléter avec vos conditions de retour et de garantie.)',
                 style: const TextStyle(height: 1.5),
               ),
@@ -154,14 +242,35 @@ class _CheckoutViewState extends State<CheckoutView> {
     );
   }
 
-  Future<void> _confirm(bool stockOk) async {
+  Future<void> _showRefused(String message) {
+    return showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.error_outline,
+            color: AppColors.harissa, size: 36),
+        title: const Text('Paiement refusé'),
+        content: Text(
+          '$message\n\nVotre panier est conservé. Vérifiez votre carte ou '
+          'choisissez un autre moyen de paiement.',
+        ),
+        actions: [
+          FilledButton(
+            style: FilledButton.styleFrom(minimumSize: const Size(0, 44)),
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Modifier'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _confirm(double total) async {
     final valid = _formKey.currentState!.validate();
     if (!_terms) setState(() => _termsError = true);
     if (!valid || !_terms) {
       _snack('Vérifiez les champs signalés en rouge.');
       return;
     }
-    if (!stockOk) return;
 
     final auth = context.read<AuthController>();
     final uid = auth.firebaseUser?.uid;
@@ -175,6 +284,8 @@ class _CheckoutViewState extends State<CheckoutView> {
       address: _address.text.trim(),
       postalCode: _postal.text.trim(),
       note: _note.text.trim(),
+      latitude: _lat,
+      longitude: _lng,
     );
 
     final orders = context.read<OrderController>();
@@ -182,13 +293,29 @@ class _CheckoutViewState extends State<CheckoutView> {
       uid: uid,
       cart: context.read<CartController>().items,
       shipping: shipping,
+      method: _method,
+      expectedTotal: total,
+      useLoyalty: _useLoyalty,
+      cardNumber: _card.number.text,
+      expiry: _card.expiry.text,
+      cvv: _card.cvv.text,
     );
     if (!mounted) return;
 
     if (order == null) {
-      _snack(orders.error ?? 'Erreur');
+      if (orders.paymentRefused) {
+        await _showRefused(orders.error ?? 'Paiement refusé.');
+      } else {
+        _snack(orders.error ?? 'Erreur');
+      }
       return;
     }
+
+    _card.clear(); // efface les données de carte de la mémoire
+
+    // nouveau compteur de commandes et nouveaux points
+    await auth.refreshProfile();
+    if (!mounted) return;
 
     // mémorise l'adresse dans le profil (sans bloquer en cas d'échec)
     if (_saveAddress) {
@@ -235,8 +362,7 @@ class _CheckoutViewState extends State<CheckoutView> {
     );
   }
 
-  Widget _row(String label, String value,
-      {bool bold = false, Color? color}) {
+  Widget _row(String label, String value, {bool bold = false, Color? color}) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
@@ -260,7 +386,9 @@ class _CheckoutViewState extends State<CheckoutView> {
   Widget build(BuildContext context) {
     final cart = context.watch<CartController>();
     final pc = context.watch<ProductController>();
-    final placing = context.watch<OrderController>().isPlacing;
+    final oc = context.watch<OrderController>();
+    final user = context.watch<AuthController>().currentUser;
+    final placing = oc.isPlacing;
 
     final lines = <_Line>[];
     for (final item in cart.items) {
@@ -273,8 +401,24 @@ class _CheckoutViewState extends State<CheckoutView> {
     }
     final subtotal = lines.fold<double>(0, (s, l) => s + l.subtotal);
     final fee = shippingFor(subtotal);
-    final total = subtotal + fee;
+    final points = user?.loyaltyPoints ?? 0;
+    final loyalty =
+        applyLoyalty(subtotal: subtotal, points: points, use: _useLoyalty);
+    final total =
+        double.parse((subtotal - loyalty.discount + fee).toStringAsFixed(2));
     final stockOk = !lines.any((l) => l.quantity > l.product.stock);
+
+    final String buttonLabel;
+    switch (oc.stage) {
+      case CheckoutStage.paying:
+        buttonLabel = 'Paiement en cours...';
+      case CheckoutStage.saving:
+        buttonLabel = 'Enregistrement...';
+      case CheckoutStage.idle:
+        buttonLabel = _method == kPayCard
+            ? 'Payer ${dt(total)}'
+            : 'Confirmer la commande';
+    }
 
     return Scaffold(
       appBar: AppBar(title: const Text('Finaliser la commande')),
@@ -365,6 +509,61 @@ class _CheckoutViewState extends State<CheckoutView> {
                         'Adresse de livraison',
                         Column(
                           children: [
+                            SizedBox(
+                              width: double.infinity,
+                              height: 50,
+                              child: OutlinedButton.icon(
+                                onPressed: _locating ? null : _useMyLocation,
+                                icon: _locating
+                                    ? const SizedBox(
+                                        height: 18,
+                                        width: 18,
+                                        child: CircularProgressIndicator(
+                                            strokeWidth: 2))
+                                    : const Icon(Icons.my_location),
+                                label: Text(_locating
+                                    ? 'Localisation en cours...'
+                                    : 'Utiliser ma position'),
+                              ),
+                            ),
+                            Padding(
+                              padding: const EdgeInsets.only(top: 8),
+                              child: _lat != null
+                                  ? Row(
+                                      children: [
+                                        const Icon(Icons.check_circle,
+                                            size: 18, color: AppColors.olive),
+                                        const SizedBox(width: 6),
+                                        const Expanded(
+                                          child: Text(
+                                              'Position GPS enregistrée pour le livreur',
+                                              style: TextStyle(
+                                                  fontSize: 12.5,
+                                                  color: AppColors.olive,
+                                                  fontWeight:
+                                                      FontWeight.w600)),
+                                        ),
+                                        TextButton(
+                                          onPressed: () => setState(() {
+                                            _lat = null;
+                                            _lng = null;
+                                          }),
+                                          child: const Text('Retirer'),
+                                        ),
+                                      ],
+                                    )
+                                  : const Align(
+                                      alignment: Alignment.centerLeft,
+                                      child: Text(
+                                        'Remplit l\'adresse automatiquement et '
+                                        'aide le livreur à vous trouver.',
+                                        style: TextStyle(
+                                            fontSize: 12,
+                                            color: AppColors.muted),
+                                      ),
+                                    ),
+                            ),
+                            const SizedBox(height: 14),
                             TextFormField(
                               controller: _governorate,
                               readOnly: true,
@@ -417,7 +616,8 @@ class _CheckoutViewState extends State<CheckoutView> {
                               ],
                               decoration: const InputDecoration(
                                 labelText: 'Code postal',
-                                prefixIcon: Icon(Icons.markunread_mailbox_outlined),
+                                prefixIcon:
+                                    Icon(Icons.markunread_mailbox_outlined),
                               ),
                               validator: (v) => (v ?? '').length == 4
                                   ? null
@@ -430,7 +630,8 @@ class _CheckoutViewState extends State<CheckoutView> {
                               maxLength: 200,
                               textCapitalization: TextCapitalization.sentences,
                               decoration: const InputDecoration(
-                                labelText: 'Instructions pour le livreur (facultatif)',
+                                labelText:
+                                    'Instructions pour le livreur (facultatif)',
                                 hintText: 'Digicode, point de repère…',
                                 prefixIcon: Icon(Icons.edit_note_rounded),
                               ),
@@ -489,67 +690,119 @@ class _CheckoutViewState extends State<CheckoutView> {
                         ),
                       ),
 
-                      // 4. Récapitulatif
+                      // 4. Paiement
                       _section(
                         4,
+                        'Paiement',
+                        PaymentSection(
+                          method: _method,
+                          onMethodChanged: (m) => setState(() => _method = m),
+                          card: _card,
+                        ),
+                      ),
+
+                      // 5. Récapitulatif et fidélité
+                      _section(
+                        5,
                         'Récapitulatif',
-                        Card(
-                          child: Padding(
-                            padding: const EdgeInsets.all(14),
-                            child: Column(
-                              children: [
-                                for (final l in lines)
-                                  Padding(
-                                    padding:
-                                        const EdgeInsets.symmetric(vertical: 6),
-                                    child: Row(
-                                      children: [
-                                        ClipRRect(
-                                          borderRadius:
-                                              BorderRadius.circular(12),
-                                          child: SizedBox(
-                                            width: 52,
-                                            height: 52,
-                                            child: ProductImage(
-                                                product: l.product),
-                                          ),
-                                        ),
-                                        const SizedBox(width: 12),
-                                        Expanded(
-                                          child: Column(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.start,
-                                            children: [
-                                              Text(l.product.name,
-                                                  maxLines: 1,
-                                                  overflow:
-                                                      TextOverflow.ellipsis,
-                                                  style: const TextStyle(
-                                                      fontWeight:
-                                                          FontWeight.w600)),
-                                              Text(
-                                                  '${l.quantity} × ${dt(l.product.price)}',
-                                                  style: const TextStyle(
-                                                      fontSize: 12,
-                                                      color: AppColors.muted)),
-                                            ],
-                                          ),
-                                        ),
-                                        Text(dt(l.subtotal),
-                                            style: const TextStyle(
-                                                fontWeight: FontWeight.w700)),
-                                      ],
-                                    ),
-                                  ),
-                                const Divider(height: 24),
-                                _row('Sous-total', dt(subtotal)),
-                                _row('Livraison', fee == 0 ? 'Gratuite' : dt(fee),
-                                    color: fee == 0 ? AppColors.olive : null),
-                                const Divider(height: 24),
-                                _row('Total à payer', dt(total), bold: true),
-                              ],
+                        Column(
+                          children: [
+                            LoyaltyCard(
+                              orderCount: user?.orderCount ?? 0,
+                              points: points,
                             ),
-                          ),
+                            if (points > 0)
+                              SwitchListTile(
+                                contentPadding:
+                                    const EdgeInsets.symmetric(horizontal: 4),
+                                value: _useLoyalty,
+                                onChanged: (v) =>
+                                    setState(() => _useLoyalty = v),
+                                title: Text(
+                                  loyalty.discount > 0
+                                      ? 'Utiliser mes points (−${dt(loyalty.discount)})'
+                                      : 'Utiliser mes points',
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.w600),
+                                ),
+                                subtitle: loyalty.pointsUsed > 0
+                                    ? Text('${loyalty.pointsUsed} points seront '
+                                        'dépensés')
+                                    : null,
+                              ),
+                            const SizedBox(height: 10),
+                            Card(
+                              child: Padding(
+                                padding: const EdgeInsets.all(14),
+                                child: Column(
+                                  children: [
+                                    for (final l in lines)
+                                      Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                            vertical: 6),
+                                        child: Row(
+                                          children: [
+                                            ClipRRect(
+                                              borderRadius:
+                                                  BorderRadius.circular(12),
+                                              child: SizedBox(
+                                                width: 52,
+                                                height: 52,
+                                                child: ProductImage(
+                                                    product: l.product),
+                                              ),
+                                            ),
+                                            const SizedBox(width: 12),
+                                            Expanded(
+                                              child: Column(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.start,
+                                                children: [
+                                                  Text(l.product.name,
+                                                      maxLines: 1,
+                                                      overflow:
+                                                          TextOverflow.ellipsis,
+                                                      style: const TextStyle(
+                                                          fontWeight:
+                                                              FontWeight.w600)),
+                                                  Text(
+                                                      '${l.quantity} × ${dt(l.product.price)}',
+                                                      style: const TextStyle(
+                                                          fontSize: 12,
+                                                          color:
+                                                              AppColors.muted)),
+                                                ],
+                                              ),
+                                            ),
+                                            Text(dt(l.subtotal),
+                                                style: const TextStyle(
+                                                    fontWeight:
+                                                        FontWeight.w700)),
+                                          ],
+                                        ),
+                                      ),
+                                    const Divider(height: 24),
+                                    _row('Sous-total', dt(subtotal)),
+                                    if (loyalty.discount > 0)
+                                      _row('Remise fidélité',
+                                          '− ${dt(loyalty.discount)}',
+                                          color: AppColors.olive),
+                                    _row('Livraison',
+                                        fee == 0 ? 'Gratuite' : dt(fee),
+                                        color:
+                                            fee == 0 ? AppColors.olive : null),
+                                    const Divider(height: 24),
+                                    _row(
+                                        _method == kPayCard
+                                            ? 'Total à payer'
+                                            : 'À payer à la livraison',
+                                        dt(total),
+                                        bold: true),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
 
@@ -612,29 +865,7 @@ class _CheckoutViewState extends State<CheckoutView> {
                               style: TextStyle(
                                   color: AppColors.harissa, fontSize: 12)),
                         ),
-                      const SizedBox(height: 8),
-                      Container(
-                        padding: const EdgeInsets.all(14),
-                        decoration: BoxDecoration(
-                          color: AppColors.lilac,
-                          borderRadius: BorderRadius.circular(18),
-                        ),
-                        child: const Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Icon(Icons.info_outline, size: 20),
-                            SizedBox(width: 10),
-                            Expanded(
-                              child: Text(
-                                'Le paiement sera ajouté à la prochaine étape. '
-                                'Pour l\'instant, votre commande est enregistrée '
-                                'avec le statut « En attente ».',
-                                style: TextStyle(fontSize: 13, height: 1.4),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
+                      const SizedBox(height: 12),
                     ],
                   ),
                 ),
@@ -664,16 +895,17 @@ class _CheckoutViewState extends State<CheckoutView> {
                   FilledButton.icon(
                     onPressed: (placing || !stockOk)
                         ? null
-                        : () => _confirm(stockOk),
+                        : () => _confirm(total),
                     icon: placing
                         ? const SizedBox(
                             height: 18,
                             width: 18,
                             child: CircularProgressIndicator(
                                 strokeWidth: 2, color: Colors.white))
-                        : const Icon(Icons.check_circle_outline),
-                    label: Text(
-                        placing ? 'Enregistrement...' : 'Confirmer la commande'),
+                        : Icon(_method == kPayCard
+                            ? Icons.lock_outline
+                            : Icons.check_circle_outline),
+                    label: Text(buttonLabel),
                   ),
                 ],
               ),

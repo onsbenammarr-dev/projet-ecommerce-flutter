@@ -8,7 +8,8 @@ import '../utils/shipping.dart';
 import '../widgets/app_footer.dart';
 import '../widgets/footer_view.dart';
 import '../widgets/status_pill.dart';
-
+import 'package:latlong2/latlong.dart';
+import '../widgets/order_map.dart';
 /// Détail d'une commande, avec la frise de suivi de livraison (en direct)
 class OrderDetailView extends StatefulWidget {
   final String orderId;
@@ -223,8 +224,23 @@ class _OrderDetailViewState extends State<OrderDetailView> {
                       ),
                     const SizedBox(height: 22),
 
-                    // Articles et montants
-                    _title('Articles'),
+                                        // Carte : destination et position du livreur
+                    if (o.status != 'annulee' &&
+                        (o.shipping?.hasCoordinates == true ||
+                            o.deliveryStatus == 'expediee' ||
+                            o.deliveryStatus == 'en_cours')) ...[
+                      _title('Position sur la carte'),
+                      OrderMap(
+                        orderId: o.id,
+                        destination: o.shipping?.hasCoordinates == true
+                            ? LatLng(o.shipping!.latitude!,
+                                o.shipping!.longitude!)
+                            : null,
+                        followCourier: o.deliveryStatus == 'expediee' ||
+                            o.deliveryStatus == 'en_cours',
+                      ),
+                      const SizedBox(height: 22),
+                    ],
                     Card(
                       child: Padding(
                         padding: const EdgeInsets.all(16),

@@ -1,7 +1,9 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/cart_item.dart';
 import '../models/order_model.dart';
+import '../utils/loyalty.dart';
 import '../utils/shipping.dart';
+import 'payment_service.dart';
 
 /// Erreur métier affichable telle quelle à l'utilisateur
 class OrderException implements Exception {
@@ -15,18 +17,25 @@ class OrderService {
   final FirebaseFirestore _db = FirebaseFirestore.instance;
 
   /// Crée la commande dans une transaction :
-  /// vérifie le stock, calcule les frais, décrémente le stock,
-  /// crée la commande et vide le panier.
+  /// vérifie le stock et le montant, applique la remise de fidélité,
+  /// décrémente le stock, crée la commande, met à jour le compteur et les
+  /// points du client, puis vide le panier.
   Future<OrderModel> placeOrder({
     required String uid,
     required List<CartItem> cart,
     required ShippingInfo shipping,
+    required String paymentMethod,
+    required double expectedTotal,
+    required bool useLoyalty,
+    String? paymentReference,
   }) {
     if (cart.isEmpty) throw OrderException('Votre panier est vide.');
 
+    final paid = paymentMethod == kPayCard;
     final orderRef = _db.collection('orders').doc();
     final products = _db.collection('products');
-    final cartCol = _db.collection('users').doc(uid).collection('cart');
+    final userRef = _db.collection('users').doc(uid);
+    final cartCol = userRef.collection('cart');
 
     return _db.runTransaction<OrderModel>((tx) async {
       // 1. Lectures (toutes avant les écritures)
@@ -34,6 +43,10 @@ class OrderService {
       for (final item in cart) {
         snaps.add(await tx.get(products.doc(item.productId)));
       }
+      final userSnap = await tx.get(userRef);
+      final udata = userSnap.data() ?? <String, dynamic>{};
+      final orderCount = (udata['orderCount'] ?? 0).toInt() as int;
+      final points = (udata['loyaltyPoints'] ?? 0).toInt() as int;
 
       // 2. Vérifications avec les prix et stocks actuels
       final items = <OrderItem>[];
@@ -65,7 +78,21 @@ class OrderService {
       }
       subtotal = double.parse(subtotal.toStringAsFixed(2));
       final fee = shippingFor(subtotal);
-      final total = double.parse((subtotal + fee).toStringAsFixed(2));
+
+      // remise de fidélité calculée avec les points réels de la base
+      final loyalty =
+          applyLoyalty(subtotal: subtotal, points: points, use: useLoyalty);
+      final total =
+          double.parse((subtotal - loyalty.discount + fee).toStringAsFixed(2));
+
+      // le montant payé doit correspondre au total recalculé
+      if ((total - expectedTotal).abs() > 0.01) {
+        throw OrderException('Le montant a changé (prix ou points de '
+            'fidélité). Vérifiez votre commande puis réessayez.');
+      }
+
+      final newCount = orderCount + 1;
+      final earned = pointsEarnedFor(newCount);
 
       // 3. Écritures
       for (var i = 0; i < cart.length; i++) {
@@ -80,16 +107,27 @@ class OrderService {
         'items': items.map((e) => e.toMap()).toList(),
         'subtotal': subtotal,
         'shippingFee': fee,
-        'discount': 0,
+        'discount': loyalty.discount,
+        'pointsUsed': loyalty.pointsUsed,
+        'pointsEarned': earned,
         'total': total,
         'address': shipping.formatted,
         'shipping': shipping.toMap(),
         'createdAt': FieldValue.serverTimestamp(),
         'status': 'en_attente',
-        'paymentStatus': 'en_attente',
-        'paymentMethod': '',
+        'paymentStatus': paid ? 'paye' : 'en_attente',
+        'paymentMethod': paymentMethod,
+        'paymentReference': paymentReference,
+        'paidAt': paid ? FieldValue.serverTimestamp() : null,
         'deliveryCompanyId': null,
         'deliveryStatus': 'en_preparation',
+      });
+
+      // compteur de commandes et points : mis à jour avec la commande
+      tx.update(userRef, {
+        'orderCount': newCount,
+        'loyaltyPoints': points - loyalty.pointsUsed + earned,
+        'lastOrderId': orderRef.id,
       });
 
       for (final item in cart) {
@@ -102,11 +140,17 @@ class OrderService {
         items: items,
         subtotal: subtotal,
         shippingFee: fee,
-        discount: 0,
+        discount: loyalty.discount,
+        pointsUsed: loyalty.pointsUsed,
+        pointsEarned: earned,
         total: total,
         address: shipping.formatted,
         shipping: shipping,
         createdAt: DateTime.now(),
+        paymentStatus: paid ? 'paye' : 'en_attente',
+        paymentMethod: paymentMethod,
+        paymentReference: paymentReference,
+        paidAt: paid ? DateTime.now() : null,
       );
     });
   }

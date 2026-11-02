@@ -39,6 +39,8 @@ class ShippingInfo {
   final String address;
   final String postalCode;
   final String note;
+  final double? latitude; // position GPS (facultative)
+  final double? longitude;
 
   const ShippingInfo({
     required this.fullName,
@@ -48,7 +50,11 @@ class ShippingInfo {
     required this.address,
     required this.postalCode,
     this.note = '',
+    this.latitude,
+    this.longitude,
   });
+
+  bool get hasCoordinates => latitude != null && longitude != null;
 
   /// Adresse sur une ligne
   String get formatted => '$address, $postalCode $city, $governorate';
@@ -61,6 +67,8 @@ class ShippingInfo {
         address: m['address'] ?? '',
         postalCode: m['postalCode'] ?? '',
         note: m['note'] ?? '',
+        latitude: (m['latitude'] as num?)?.toDouble(),
+        longitude: (m['longitude'] as num?)?.toDouble(),
       );
 
   Map<String, dynamic> toMap() => {
@@ -71,6 +79,8 @@ class ShippingInfo {
         'address': address,
         'postalCode': postalCode,
         'note': note,
+        if (latitude != null) 'latitude': latitude,
+        if (longitude != null) 'longitude': longitude,
       };
 }
 
@@ -80,14 +90,18 @@ class OrderModel {
   final List<OrderItem> items;
   final double subtotal;
   final double shippingFee;
-  final double discount;
+  final double discount; // remise fidélité en DT
+  final int pointsUsed; // points dépensés sur cette commande
+  final int pointsEarned; // points gagnés par cette commande
   final double total;
   final String address; // adresse sur une ligne
   final ShippingInfo? shipping;
   final DateTime? createdAt;
   final String status; // en_attente | confirmee | annulee
   final String paymentStatus; // en_attente | paye | refuse
-  final String paymentMethod;
+  final String paymentMethod; // carte | livraison
+  final String? paymentReference;
+  final DateTime? paidAt;
   final String? deliveryCompanyId;
   final String deliveryStatus; // en_preparation | expediee | en_cours | livree
 
@@ -102,9 +116,13 @@ class OrderModel {
     required this.address,
     required this.shipping,
     required this.createdAt,
+    this.pointsUsed = 0,
+    this.pointsEarned = 0,
     this.status = 'en_attente',
     this.paymentStatus = 'en_attente',
     this.paymentMethod = '',
+    this.paymentReference,
+    this.paidAt,
     this.deliveryCompanyId,
     this.deliveryStatus = 'en_preparation',
   });
@@ -120,6 +138,8 @@ class OrderModel {
       subtotal: (m['subtotal'] ?? 0).toDouble(),
       shippingFee: (m['shippingFee'] ?? 0).toDouble(),
       discount: (m['discount'] ?? 0).toDouble(),
+      pointsUsed: (m['pointsUsed'] ?? 0).toInt(),
+      pointsEarned: (m['pointsEarned'] ?? 0).toInt(),
       total: (m['total'] ?? 0).toDouble(),
       address: m['address'] ?? '',
       shipping: ship is Map
@@ -129,10 +149,14 @@ class OrderModel {
       status: m['status'] ?? 'en_attente',
       paymentStatus: m['paymentStatus'] ?? 'en_attente',
       paymentMethod: m['paymentMethod'] ?? '',
+      paymentReference: m['paymentReference'],
+      paidAt: (m['paidAt'] as Timestamp?)?.toDate(),
       deliveryCompanyId: m['deliveryCompanyId'],
       deliveryStatus: m['deliveryStatus'] ?? 'en_preparation',
     );
   }
+
+  bool get isPaid => paymentStatus == 'paye';
 
   /// Référence courte à montrer au client
   String get shortId =>

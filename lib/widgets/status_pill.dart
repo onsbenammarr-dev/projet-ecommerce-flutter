@@ -38,3 +38,8 @@ String paymentLabel(String status) => switch (status) {
       'refuse' => 'Refusé',
       _ => 'En attente',
     };
+    String paymentMethodLabel(String method) => switch (method) {
+      'carte' => 'Carte bancaire',
+      'livraison' => 'À la livraison',
+      _ => 'Non précisé',
+    };

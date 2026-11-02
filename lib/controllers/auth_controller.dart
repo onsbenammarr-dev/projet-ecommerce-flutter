@@ -81,6 +81,18 @@ class AuthController extends ChangeNotifier {
       return _finish(false, AuthService.errorMessage(e));
     }
   }
+    /// Recharge le profil (compteur de commandes, points de fidélité)
+  Future<void> refreshProfile() async {
+    final uid = firebaseUser?.uid;
+    if (uid == null) return;
+    try {
+      final fresh = await _service.getUser(uid);
+      if (fresh != null) {
+        currentUser = fresh;
+        notifyListeners();
+      }
+    } catch (_) {}
+  }
 
   Future<void> logout() => _service.signOut();
 
